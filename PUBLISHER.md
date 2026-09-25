@@ -6,7 +6,22 @@ El workflow `.github/workflows/publish-atletismo-release.yml` solo se dispara ma
 
 El job `validate` tiene solo permisos de lectura y acceso al secret existente `ATLETISMO_SOURCE_READ_TOKEN`. Obtiene el signed run, sus jobs del intento exacto, el artifact por ID y el SHA del blob del pipeline firmado en `SOURCE_SHA`. Ese blob debe coincidir con el valor auditado fijo en `scripts/publisher-policy.js`; cambiarlo requiere otra auditoría. El código candidato nunca se ejecuta: solo se procesan JSON y APK como datos. El ZIP se contrasta con el digest de GitHub, se exigen exactamente dos entradas y se verifican los SHA-256 de ambos archivos. No se usa el nombre del artifact para seleccionarlo.
 
+Además de hash, tamaño, URL y contrato de `update.json`, se inspecciona el APK real con `aapt dump badging` de Android Build Tools 35.0.0 y se comprueba su firma con `apksigner verify`. Los campos reales `packageId`, `versionName`, `versionCode` y `minSdk` deben coincidir exactamente con `update.json`; el paquete y la versión deben coincidir también con `com.atletismo.personal` y el input `VERSION`. La misma inspección del APK y comprobación de firma se repite sobre los bytes descargados en el job privilegiado `publish`, antes de cualquier escritura pública. Si faltan las herramientas o el APK no se puede analizar/verificar, el workflow aborta.
+
+La Stable pública se obtiene de `releases/latest`; su `update.json` se descarga y contrasta con tamaño y digest publicados. El candidato debe tener versión y versionCode estrictamente superiores y `minimumAppVersion <=` la versión de la Stable pública: la instalada estable debe poder actualizar directamente. La comparación de versiones usa el mismo formato numérico estricto de tres componentes que el cliente Android.
+
 El job `publish` es separado, solo se ejecuta tras validación satisfactoria y tiene `contents:write` bajo `production-release`. Descarga el paquete validado del mismo workflow run, vuelve a comprobar archivos, Stable pública y ausencia de release y tag inmediatamente antes de crear un draft. Crea un tag nuevo de forma atómica contra el SHA confiable del publicador; si alguien lo creó mientras tanto, aborta en vez de reutilizarlo. Luego crea el draft con `--verify-tag`. Los dos jobs ejecutan la lógica del commit confiable del publicador en `main`, nunca scripts de `SOURCE_SHA`. Si la protección de reviewers del environment no se aplica realmente a esta cuenta/plan, no se debe usar `dry_run=false` hasta que exista una puerta de aprobación efectiva.
+
+Todas las Actions de este publicador y su CI están fijadas a commits completos verificados contra sus tags oficiales:
+
+| Action | Versión | Commit SHA |
+| --- | --- | --- |
+| `actions/checkout` | v4.2.2 | `11bd71901bbe5b1630ceea73d27597364c9af683` |
+| `actions/upload-artifact` | v4.6.2 | `ea165f8d65b6e75b540449e92b4886f43607fa02` |
+| `actions/download-artifact` | v4.3.0 | `d3f86a106a0bac45b974a628896c90dbdf5c8093` |
+| `actions/setup-node` | v4.4.0 | `49933ea5288caeca8642d1e84afbd3f7d6820020` |
+
+El CI descarga `actionlint` v1.7.12 del proyecto oficial y verifica el SHA-256 fijo del archivo Linux antes de ejecutarlo. Si cambia una Action o el binario de lint, actualizar su pin exige revisión del nuevo valor.
 
 ## Recuperación y límites
 

@@ -8,6 +8,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const policy = require('../scripts/publisher-policy');
+const apkInspection = require('../scripts/apk-inspection');
 
 const sha = (data) => crypto.createHash('sha256').update(data).digest('hex');
 const apk = Buffer.from('synthetic APK fixture - never published');
@@ -47,15 +48,21 @@ test('real update.json contract: valid candidate and rejected mutations', () => 
 });
 
 test('Stable comparison requires both version and versionCode to increase', () => {
-  assert.doesNotThrow(() => policy.validateStable(stable(), { version: '3.4.3', versionCode: 30317, channel: 'stable' }, { version, versionCode: 30318 }));
+  const publicStable = { version: '3.4.3', versionCode: 30317, channel: 'stable' };
+  for (const minimumAppVersion of ['3.4.0', '3.4.3']) {
+    assert.doesNotThrow(() => policy.validateStable(stable(), publicStable, { version, versionCode: 30318, minimumAppVersion }));
+  }
+  assert.throws(() => policy.validateStable(stable(), publicStable, { version, versionCode: 30318, minimumAppVersion: '3.4.4' }), /minimumAppVersion/);
+  assert.throws(() => policy.validateStable(stable(), publicStable, { version, versionCode: 30318, minimumAppVersion: '3.4.x' }), /Stable version/);
+  assert.throws(() => policy.validateStable(stable(), publicStable, { version, versionCode: 30318 }), /Stable version/);
   for (const candidate of [
-    { version, versionCode: 30317 },
-    { version, versionCode: 30316 },
-    { version: '3.4.2', versionCode: 30318 },
-    { version: '3.4.3', versionCode: 30318 }
-  ]) assert.throws(() => policy.validateStable(stable(), { version: '3.4.3', versionCode: 30317, channel: 'stable' }, candidate));
-  assert.throws(() => policy.validateStable(stable(), { version: '3.4.3', channel: 'stable' }, { version, versionCode: 30318 }), /versionCode/);
-  assert.throws(() => policy.validateStable({ ...stable(), draft: true }, { version: '3.4.3', versionCode: 30317, channel: 'stable' }, { version, versionCode: 30318 }));
+    { version, versionCode: 30317, minimumAppVersion: '3.4.0' },
+    { version, versionCode: 30316, minimumAppVersion: '3.4.0' },
+    { version: '3.4.2', versionCode: 30318, minimumAppVersion: '3.4.0' },
+    { version: '3.4.3', versionCode: 30318, minimumAppVersion: '3.4.0' }
+  ]) assert.throws(() => policy.validateStable(stable(), publicStable, candidate));
+  assert.throws(() => policy.validateStable(stable(), { version: '3.4.3', channel: 'stable' }, { version, versionCode: 30318, minimumAppVersion: '3.4.0' }), /versionCode/);
+  assert.throws(() => policy.validateStable({ ...stable(), draft: true }, publicStable, { version, versionCode: 30318, minimumAppVersion: '3.4.0' }));
 });
 
 test('only HTTP 404 proves release or tag absence', () => {
@@ -116,15 +123,20 @@ test('Stable metadata must be retrievable, authentic and unambiguous', (t) => {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const stableFile = path.join(dir, 'stable-update.json');
   const latestFile = path.join(dir, 'latest.json');
+  const candidateFile = path.join(dir, 'candidate-update.json');
+  fs.writeFileSync(candidateFile, JSON.stringify(metadata()));
   const stableUpdate = JSON.stringify({ version: '3.4.3', versionCode: 30317, channel: 'stable' });
   fs.writeFileSync(stableFile, stableUpdate);
   const latest = { ...stable(), assets: [{
     name: 'update.json', size: Buffer.byteLength(stableUpdate), digest: 'sha256:' + sha(stableUpdate),
     browser_download_url: `https://github.com/${policy.RELEASES_REPO}/releases/download/v3.4.3/update.json`
   }] };
-  const invoke = () => spawnSync(process.execPath, [path.join(__dirname, '../scripts/publisher-check.js'), 'stable', latestFile, stableFile, version, '30318'], { encoding: 'utf8' });
+  const invoke = () => spawnSync(process.execPath, [path.join(__dirname, '../scripts/publisher-check.js'), 'stable', latestFile, stableFile, candidateFile], { encoding: 'utf8' });
   fs.writeFileSync(latestFile, JSON.stringify(latest));
   assert.equal(invoke().status, 0);
+  fs.writeFileSync(candidateFile, JSON.stringify({ ...metadata(), minimumAppVersion: version }));
+  assert.equal(invoke().status, 1);
+  fs.writeFileSync(candidateFile, JSON.stringify(metadata()));
   fs.writeFileSync(stableFile, 'invalid');
   assert.equal(invoke().status, 1);
   fs.writeFileSync(stableFile, stableUpdate);
@@ -133,6 +145,38 @@ test('Stable metadata must be retrievable, authentic and unambiguous', (t) => {
   fs.writeFileSync(latestFile, JSON.stringify(latest));
   fs.rmSync(stableFile);
   assert.equal(invoke().status, 1);
+});
+
+test('real APK badging is parsed strictly and compared with metadata and input', () => {
+  const actual = apkInspection.parseApkBadging("package: name='com.atletismo.personal' versionCode='30318' versionName='3.4.4'\nsdkVersion:'24'\n");
+  assert.deepEqual(actual, { packageId: 'com.atletismo.personal', versionCode: 30318, versionName: '3.4.4', minSdk: 24 });
+  assert.doesNotThrow(() => apkInspection.validateApkIdentity(actual, metadata(), version));
+  for (const [change, message] of [
+    [(v) => { v.packageId = 'other.app'; }, /packageId/],
+    [(v) => { v.versionName = '3.4.3'; }, /versionName/],
+    [(v) => { v.versionCode = 30317; }, /versionCode/],
+    [(v) => { v.minSdk = 25; }, /minSdk/]
+  ]) {
+    const altered = { ...actual };
+    change(altered);
+    assert.throws(() => apkInspection.validateApkIdentity(altered, metadata(), version), message);
+  }
+  assert.throws(() => apkInspection.parseApkBadging('not an APK'), /package identity/);
+  assert.throws(() => apkInspection.parseApkBadging("package: name='com.atletismo.personal' versionCode='30318' versionName='3.4.4'\nsdkVersion:'24'\nsdkVersion:'25'\n"), /minimum SDK/);
+});
+
+test('real aapt rejects fake bytes even if update.json declarations match', (t) => {
+  const aapt = process.env.AAPT_TOOL || (process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA || '', 'Android', 'Sdk', 'build-tools', '34.0.0', 'aapt.exe') : '');
+  if (!aapt || !fs.existsSync(aapt)) return t.skip('aapt unavailable outside Android runner');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atletismo-fake-apk-test-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const apkFile = path.join(dir, 'Atletismo-release.apk');
+  const updateFile = path.join(dir, 'update.json');
+  fs.writeFileSync(apkFile, apk);
+  fs.writeFileSync(updateFile, JSON.stringify(metadata()));
+  const result = spawnSync(process.execPath, [path.join(__dirname, '../scripts/publisher-check.js'), 'apk', apkFile, updateFile, version, aapt], { encoding: 'utf8' });
+  assert.equal(result.status, 1, result.stdout);
+  assert.match(result.stderr, /Invalid APK or aapt failed/);
 });
 
 test('artifact archive accepts only the two exact root entries', (t) => {
@@ -169,6 +213,13 @@ test('publication requires separate explicit confirmation; workflow has no autom
   assert.match(workflow, /if: inputs.dry_run == false/);
   assert.match(workflow, /permissions:\s*\n\s*contents: read/);
   assert.match(workflow, /permissions:\s*\n\s*contents: write/);
+  const ci = fs.readFileSync(path.join(__dirname, '../.github/workflows/publisher-tests.yml'), 'utf8');
+  for (const text of [workflow, ci]) {
+    for (const [, ref] of text.matchAll(/uses:\s+actions\/[^@\s]+@([^\s]+)/g)) assert.match(ref, /^[a-f0-9]{40}$/);
+    assert.doesNotMatch(text, /uses:\s+actions\/[^@\s]+@(v[0-9]|main|master)/);
+  }
+  assert.match(ci, /actionlint_1\.7\.12_linux_amd64\.tar\.gz/);
+  assert.match(ci, /sha256sum -c/);
 });
 
 test('all publisher bash blocks parse', () => {

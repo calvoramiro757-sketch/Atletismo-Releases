@@ -5,6 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 const policy = require('./publisher-policy');
+const apkInspection = require('./apk-inspection');
 
 const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
 const hash = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -41,8 +42,13 @@ try {
     assert.equal(hash(update), updateJsonSha256, 'update.json hash mismatch');
     policy.validateMetadata(read(update), { version, apkSha256, apkSize: fs.statSync(apk).size });
     console.log('Exact files, hashes and update.json contract verified');
+  } else if (mode === 'apk') {
+    const [apkFile, updateFile, version, aaptFile] = args;
+    const actual = apkInspection.inspectApk(apkFile, aaptFile);
+    apkInspection.validateApkIdentity(actual, read(updateFile), version);
+    console.log(`APK identity verified: ${actual.packageId} ${actual.versionName}/${actual.versionCode}, minSdk ${actual.minSdk}`);
   } else if (mode === 'stable') {
-    const [latestFile, updateFile, version, versionCodeText] = args;
+    const [latestFile, updateFile, candidateFile] = args;
     const latest = read(latestFile);
     const assets = latest.assets;
     assert.ok(Array.isArray(assets), 'Latest release assets unavailable');
@@ -53,8 +59,9 @@ try {
     assert.equal(asset.browser_download_url, `https://github.com/${policy.RELEASES_REPO}/releases/download/v${stableVersion}/update.json`, 'Stable metadata URL mismatch');
     assert.equal(asset.size, fs.statSync(updateFile).size, 'Stable metadata size mismatch');
     assert.equal(asset.digest, `sha256:${hash(updateFile)}`, 'Stable metadata digest mismatch');
-    policy.validateStable(latest, read(updateFile), { version, versionCode: Number(versionCodeText) });
-    console.log(`Candidate ${version}/${versionCodeText} is strictly newer than public Stable ${stableVersion}`);
+    const candidate = read(candidateFile);
+    policy.validateStable(latest, read(updateFile), candidate);
+    console.log(`Candidate ${candidate.version}/${candidate.versionCode} is strictly newer than and directly upgradeable from public Stable ${stableVersion}`);
   } else if (mode === 'release') {
     const [releaseFile, version, apkSha256, updateJsonSha256, draftText] = args;
     assert.ok(['true', 'false'].includes(draftText), 'Invalid draft expectation');

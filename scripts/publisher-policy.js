@@ -80,6 +80,8 @@ function validateStable(latest, stableMetadata, candidate) {
   versionCode(stableMetadata.versionCode);
   assert.ok(compareVersions(candidate.version, stableVersion) > 0, 'Candidate version is not newer than Stable');
   assert.ok(versionCode(candidate.versionCode) > stableMetadata.versionCode, 'Candidate versionCode is not newer than Stable');
+  versionParts(candidate.minimumAppVersion);
+  assert.ok(compareVersions(candidate.minimumAppVersion, stableVersion) <= 0, 'Candidate minimumAppVersion blocks the public Stable');
 }
 
 function validateAbsenceStatus(status, kind) {
