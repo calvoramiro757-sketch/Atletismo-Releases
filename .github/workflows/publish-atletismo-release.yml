@@ -1,0 +1,258 @@
+name: Publish controlled Atletismo release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish, for example 3.4.4'
+        required: true
+        type: string
+      source_sha:
+        description: 'Full approved source commit SHA in calvoramiro757-sketch/Atletismo'
+        required: true
+        type: string
+      signed_run_id:
+        description: 'Successful signed build workflow run id from calvoramiro757-sketch/Atletismo'
+        required: true
+        type: string
+      artifact_id:
+        description: 'Exact release artifact id from the signed run'
+        required: true
+        type: string
+      apk_sha256:
+        description: 'Expected SHA-256 for Atletismo-release.apk'
+        required: true
+        type: string
+      update_json_sha256:
+        description: 'Expected SHA-256 for update.json'
+        required: true
+        type: string
+      dry_run:
+        description: 'Validate only; leave true until final publication authorization'
+        required: true
+        default: true
+        type: boolean
+      publish_confirm:
+        description: 'Set true only when the user explicitly authorized this publication'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: controlled-atletismo-release
+  cancel-in-progress: false
+
+jobs:
+  validate_and_publish:
+    name: Validate exact artifact and publish after approval
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production-release
+    env:
+      SOURCE_REPO: calvoramiro757-sketch/Atletismo
+      RELEASES_REPO: calvoramiro757-sketch/Atletismo-Releases
+      VERSION: ${{ inputs.version }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      SIGNED_RUN_ID: ${{ inputs.signed_run_id }}
+      ARTIFACT_ID: ${{ inputs.artifact_id }}
+      APK_SHA256: ${{ inputs.apk_sha256 }}
+      UPDATE_JSON_SHA256: ${{ inputs.update_json_sha256 }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      PUBLISH_CONFIRM: ${{ inputs.publish_confirm }}
+    steps:
+      - name: Require trusted workflow on main and valid inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == "$RELEASES_REPO" ]]
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
+          [[ "$GITHUB_WORKFLOW_REF" == "$RELEASES_REPO/.github/workflows/publish-atletismo-release.yml@refs/heads/main" ]]
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$SIGNED_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$APK_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$UPDATE_JSON_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          if [[ "$DRY_RUN" != "true" ]]; then
+            [[ "$PUBLISH_CONFIRM" == "true" ]]
+          fi
+
+      - name: Checkout trusted publisher
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Verify source token and signed run evidence
+        env:
+          GH_TOKEN: ${{ secrets.ATLETISMO_SOURCE_READ_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN" || { echo "Missing ATLETISMO_SOURCE_READ_TOKEN environment secret"; exit 1; }
+          gh api "repos/$SOURCE_REPO/actions/runs/$SIGNED_RUN_ID" > "$RUNNER_TEMP/run.json"
+          node - <<'NODE'
+          const fs = require('fs');
+          const run = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/run.json', 'utf8'));
+          const expectedSha = process.env.SOURCE_SHA;
+          const expectedPath = '.github/workflows/build-release-apk.yml';
+          const failures = [];
+          if (run.status !== 'completed') failures.push(`run status is ${run.status}`);
+          if (run.conclusion !== 'success') failures.push(`run conclusion is ${run.conclusion}`);
+          if (run.head_sha !== expectedSha) failures.push(`run head_sha is ${run.head_sha}`);
+          if (run.path !== expectedPath) failures.push(`run path is ${run.path}`);
+          if (failures.length) {
+            console.error(failures.join('\n'));
+            process.exit(1);
+          }
+          console.log(`Signed run verified: attempt ${run.run_attempt}, source ${run.head_sha}`);
+          NODE
+          gh api "repos/$SOURCE_REPO/actions/runs/$SIGNED_RUN_ID/artifacts" > "$RUNNER_TEMP/artifacts.json"
+          node - <<'NODE'
+          const fs = require('fs');
+          const data = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/artifacts.json', 'utf8'));
+          const artifact = data.artifacts.find((item) => String(item.id) === process.env.ARTIFACT_ID);
+          if (!artifact) {
+            console.error(`Artifact id ${process.env.ARTIFACT_ID} was not found in signed run`);
+            process.exit(1);
+          }
+          if (artifact.expired) {
+            console.error(`Artifact id ${process.env.ARTIFACT_ID} is expired`);
+            process.exit(1);
+          }
+          console.log(`Artifact verified: ${artifact.name} (${artifact.id})`);
+          NODE
+
+      - name: Download exact signed artifact
+        uses: actions/download-artifact@v4
+        with:
+          repository: calvoramiro757-sketch/Atletismo
+          run-id: ${{ inputs.signed_run_id }}
+          artifact-ids: ${{ inputs.artifact_id }}
+          github-token: ${{ secrets.ATLETISMO_SOURCE_READ_TOKEN }}
+          path: dist
+          merge-multiple: true
+
+      - name: Verify files, names and hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f dist/Atletismo-release.apk
+          test -f dist/update.json
+          [[ "$(find dist -maxdepth 1 -type f | wc -l)" -eq 2 ]]
+          echo "$APK_SHA256  dist/Atletismo-release.apk" | sha256sum -c -
+          echo "$UPDATE_JSON_SHA256  dist/update.json" | sha256sum -c -
+          node - <<'NODE'
+          const fs = require('fs');
+          const metadata = JSON.parse(fs.readFileSync('dist/update.json', 'utf8'));
+          const version = process.env.VERSION;
+          const expectedApk = process.env.APK_SHA256;
+          const expectedSha = process.env.SOURCE_SHA;
+          const versionName = String(metadata.versionName || metadata.version || '');
+          const apkHash = String(metadata.sha256 || metadata.apkSha256 || metadata.apk_sha256 || '');
+          const sourceSha = String(metadata.sourceSha || metadata.source_sha || '');
+          const failures = [];
+          if (versionName !== version) failures.push(`update.json version is ${versionName}`);
+          if (apkHash && apkHash !== expectedApk) failures.push(`update.json APK hash is ${apkHash}`);
+          if (sourceSha && sourceSha !== expectedSha) failures.push(`update.json source SHA is ${sourceSha}`);
+          if (failures.length) {
+            console.error(failures.join('\n'));
+            process.exit(1);
+          }
+          console.log(`update.json contract verified for ${version}`);
+          NODE
+
+      - name: Verify public Stable and target absence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$RELEASES_REPO/releases/latest" > "$RUNNER_TEMP/latest.json"
+          node - <<'NODE'
+          const fs = require('fs');
+          const latest = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/latest.json', 'utf8'));
+          const current = String(latest.tag_name || '').replace(/^v/, '');
+          const next = process.env.VERSION;
+          const parse = (v) => v.split('.').map((part) => Number(part));
+          const [a, b, c] = parse(current);
+          const [x, y, z] = parse(next);
+          const newer = x > a || (x === a && (y > b || (y === b && z > c)));
+          if (!newer) {
+            console.error(`Target version ${next} is not newer than public Stable ${current}`);
+            process.exit(1);
+          }
+          console.log(`Public Stable verified: ${current}; target ${next}`);
+          NODE
+          set +e
+          gh api "repos/$RELEASES_REPO/releases/tags/v$VERSION" > "$RUNNER_TEMP/target.json" 2> "$RUNNER_TEMP/target.err"
+          status=$?
+          set -e
+          if [[ "$status" -eq 0 ]]; then
+            echo "Release v$VERSION already exists; refusing to overwrite"
+            exit 1
+          fi
+          if ! grep -qi "not found" "$RUNNER_TEMP/target.err"; then
+            cat "$RUNNER_TEMP/target.err"
+            echo "Could not prove release v$VERSION is absent; failing closed"
+            exit 1
+          fi
+
+      - name: Stop after validation in dry run
+        if: inputs.dry_run == true
+        shell: bash
+        run: |
+          echo "Dry run completed. No release was created."
+
+      - name: Create draft release with exact assets
+        if: inputs.dry_run == false
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/release-notes.md" <<NOTES
+          Source repo: $SOURCE_REPO
+          Source SHA: $SOURCE_SHA
+          Signed run: https://github.com/$SOURCE_REPO/actions/runs/$SIGNED_RUN_ID
+          Artifact ID: $ARTIFACT_ID
+          APK SHA-256: $APK_SHA256
+          update.json SHA-256: $UPDATE_JSON_SHA256
+          NOTES
+          gh release create "v$VERSION" dist/Atletismo-release.apk dist/update.json \
+            --repo "$RELEASES_REPO" \
+            --draft \
+            --title "App Atletismo V$VERSION" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+
+      - name: Verify draft assets and publish as latest
+        if: inputs.dry_run == false
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$RELEASES_REPO/releases/tags/v$VERSION" > "$RUNNER_TEMP/draft.json"
+          node - <<'NODE'
+          const fs = require('fs');
+          const release = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/draft.json', 'utf8'));
+          const assets = release.assets || [];
+          const names = assets.map((asset) => asset.name).sort();
+          const expected = ['Atletismo-release.apk', 'update.json'];
+          const failures = [];
+          if (!release.draft) failures.push('release is not draft before final promotion');
+          if (JSON.stringify(names) !== JSON.stringify(expected)) failures.push(`assets are ${names.join(', ')}`);
+          for (const asset of assets) {
+            if (asset.name === 'Atletismo-release.apk' && asset.digest !== `sha256:${process.env.APK_SHA256}`) failures.push('APK digest mismatch on GitHub');
+            if (asset.name === 'update.json' && asset.digest !== `sha256:${process.env.UPDATE_JSON_SHA256}`) failures.push('update.json digest mismatch on GitHub');
+          }
+          if (failures.length) {
+            console.error(failures.join('\n'));
+            process.exit(1);
+          }
+          NODE
+          gh release edit "v$VERSION" --repo "$RELEASES_REPO" --draft=false --latest
+          gh api "repos/$RELEASES_REPO/releases/latest" | jq -e --arg tag "v$VERSION" '.tag_name == $tag and .draft == false and .prerelease == false'
