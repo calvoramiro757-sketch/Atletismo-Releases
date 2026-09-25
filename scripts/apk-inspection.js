@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
+const path = require('node:path');
 
 function parseApkBadging(output) {
   assert.equal(typeof output, 'string', 'aapt badging output unavailable');
@@ -39,4 +40,45 @@ function inspectApk(apkFile, aaptFile) {
   return parseApkBadging(result.stdout);
 }
 
-module.exports = { parseApkBadging, validateApkIdentity, inspectApk };
+function parseSigningCertificate(output) {
+  assert.equal(typeof output, 'string', 'apksigner certificate output unavailable');
+  const signerCountLines = output.match(/^Number of signers:.*$/gm) || [];
+  assert.equal(signerCountLines.length, 1, 'APK signer count is missing or ambiguous');
+  const signerCount = /^Number of signers: ([0-9]+)$/.exec(signerCountLines[0].trimEnd());
+  assert.ok(signerCount, 'APK signer count cannot be parsed');
+  assert.equal(Number(signerCount[1]), 1, 'APK must have exactly one signer');
+
+  const digestLines = output.match(/^Signer #[0-9]+ certificate SHA-256 digest:.*$/gm) || [];
+  assert.equal(digestLines.length, 1, 'APK signing certificate is missing or ambiguous');
+  const digest = /^Signer #1 certificate SHA-256 digest: ([a-fA-F0-9]{64})$/.exec(digestLines[0].trimEnd());
+  assert.ok(digest, 'APK signing certificate SHA-256 cannot be parsed');
+  const fingerprint = digest[1].toLowerCase();
+  assert.match(fingerprint, /^[a-f0-9]{64}$/, 'Invalid APK signing certificate SHA-256');
+  return fingerprint;
+}
+
+function validateSigningCertificate(actual, expected) {
+  assert.match(expected, /^[a-f0-9]{64}$/, 'Invalid audited signing certificate SHA-256');
+  assert.match(actual, /^[a-f0-9]{64}$/, 'Invalid APK signing certificate SHA-256');
+  assert.equal(actual, expected, 'APK signing certificate is not the official App Atletismo certificate');
+}
+
+function inspectSigningCertificate(apkFile, apksignerFile) {
+  let executable = apksignerFile;
+  let args = ['verify', '--verbose', '--print-certs', apkFile];
+  if (process.platform === 'win32' && /\.(?:bat|cmd)$/i.test(apksignerFile)) {
+    executable = 'java';
+    args = ['-jar', path.join(path.dirname(apksignerFile), 'lib', 'apksigner.jar'), ...args];
+  }
+  const result = spawnSync(executable, args, {
+    encoding: 'utf8', timeout: 20000, maxBuffer: 1024 * 1024, windowsHide: true
+  });
+  assert.ok(!result.error, `apksigner could not inspect APK certificate: ${result.error?.message}`);
+  assert.equal(result.status, 0, `APK signature verification failed: ${result.stderr || result.stdout}`);
+  return parseSigningCertificate(result.stdout);
+}
+
+module.exports = {
+  parseApkBadging, validateApkIdentity, inspectApk,
+  parseSigningCertificate, validateSigningCertificate, inspectSigningCertificate
+};

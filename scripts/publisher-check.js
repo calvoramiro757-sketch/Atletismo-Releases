@@ -47,6 +47,11 @@ try {
     const actual = apkInspection.inspectApk(apkFile, aaptFile);
     apkInspection.validateApkIdentity(actual, read(updateFile), version);
     console.log(`APK identity verified: ${actual.packageId} ${actual.versionName}/${actual.versionCode}, minSdk ${actual.minSdk}`);
+  } else if (mode === 'certificate') {
+    const [apkFile, apksignerFile] = args;
+    const fingerprint = apkInspection.inspectSigningCertificate(apkFile, apksignerFile);
+    apkInspection.validateSigningCertificate(fingerprint, policy.OFFICIAL_SIGNING_CERT_SHA256);
+    console.log(`Official App Atletismo signing certificate verified: ${fingerprint}`);
   } else if (mode === 'stable') {
     const [latestFile, updateFile, candidateFile] = args;
     const latest = read(latestFile);

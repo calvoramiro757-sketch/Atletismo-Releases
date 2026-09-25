@@ -32,8 +32,11 @@ jobs:
         shell: bash
         run: |
           AAPT_TOOL="${ANDROID_SDK_ROOT:?}/build-tools/35.0.0/aapt"
+          APKSIGNER_TOOL="${ANDROID_SDK_ROOT:?}/build-tools/35.0.0/apksigner"
           test -x "$AAPT_TOOL"
+          test -x "$APKSIGNER_TOOL"
           export AAPT_TOOL
+          export APKSIGNER_TOOL
           node --test tests/*.test.js
       - run: node --check scripts/publisher-policy.js
       - run: node --check scripts/publisher-check.js

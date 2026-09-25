@@ -8,6 +8,9 @@ const PACKAGE_ID = 'com.atletismo.personal';
 // Audited blob from the signed workflow used for the V3.4.3 candidate.
 // Changing this constant requires an independent audit of the new pipeline.
 const TRUSTED_SIGNED_WORKFLOW_BLOB = '256f0e17a5661841dad0ef9b4873402263d91e09';
+// Extracted with apksigner --print-certs from V3.4.3 signed artifact 10873090249
+// (signed run 36153245765, source 40e28c969b914724cecc74c05b973813f842e20c).
+const OFFICIAL_SIGNING_CERT_SHA256 = '9dfe429d7de62570120a3d9f8f0026e55317f57bae4f9d8acbcab32941191ce5';
 const SIGNED_WORKFLOW_PATH = '.github/workflows/build-release-apk.yml';
 const ARTIFACT_NAME = 'Atletismo-release-artifact';
 const FILES = ['Atletismo-release.apk', 'update.json'];
@@ -148,4 +151,4 @@ function validateAuthorization(dryRun, publishConfirm) {
   if (!dryRun) assert.equal(publishConfirm, true, 'Publication requires explicit confirmation');
 }
 
-module.exports = { SOURCE_REPO, RELEASES_REPO, PACKAGE_ID, FILES, TRUSTED_SIGNED_WORKFLOW_BLOB, compareVersions, validateMetadata, validateStable, validateAbsenceStatus, validateEvidence, validateReleaseAssets, validateAuthorization };
+module.exports = { SOURCE_REPO, RELEASES_REPO, PACKAGE_ID, FILES, TRUSTED_SIGNED_WORKFLOW_BLOB, OFFICIAL_SIGNING_CERT_SHA256, compareVersions, validateMetadata, validateStable, validateAbsenceStatus, validateEvidence, validateReleaseAssets, validateAuthorization };

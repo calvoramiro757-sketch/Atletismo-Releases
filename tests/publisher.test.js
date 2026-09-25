@@ -165,6 +165,30 @@ test('real APK badging is parsed strictly and compared with metadata and input',
   assert.throws(() => apkInspection.parseApkBadging("package: name='com.atletismo.personal' versionCode='30318' versionName='3.4.4'\nsdkVersion:'24'\nsdkVersion:'25'\n"), /minimum SDK/);
 });
 
+test('only the audited official signing certificate is accepted', () => {
+  const official = policy.OFFICIAL_SIGNING_CERT_SHA256;
+  const output = (fingerprint, signerCount = 1) =>
+    `Verifies\nNumber of signers: ${signerCount}\nSigner #1 certificate SHA-256 digest: ${fingerprint}\n`;
+  assert.equal(apkInspection.parseSigningCertificate(output(official)), official);
+  assert.doesNotThrow(() => apkInspection.validateSigningCertificate(official, official));
+
+  const otherValidCertificate = 'a'.repeat(64);
+  const parsedOther = apkInspection.parseSigningCertificate(output(otherValidCertificate));
+  assert.throws(
+    () => apkInspection.validateSigningCertificate(parsedOther, official),
+    /official App Atletismo certificate/
+  );
+  assert.throws(() => apkInspection.parseSigningCertificate(output('not-a-sha256')), /cannot be parsed/);
+  assert.throws(() => apkInspection.parseSigningCertificate('Verifies\nNumber of signers: 1\n'), /missing or ambiguous/);
+  assert.throws(
+    () => apkInspection.parseSigningCertificate(
+      `Verifies\nNumber of signers: 2\nSigner #1 certificate SHA-256 digest: ${official}\nSigner #2 certificate SHA-256 digest: ${otherValidCertificate}\n`
+    ),
+    /exactly one signer/
+  );
+  assert.throws(() => apkInspection.validateSigningCertificate(official, 'broken'), /audited signing certificate/);
+});
+
 test('real aapt rejects fake bytes even if update.json declarations match', (t) => {
   const aapt = process.env.AAPT_TOOL || (process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA || '', 'Android', 'Sdk', 'build-tools', '34.0.0', 'aapt.exe') : '');
   if (!aapt || !fs.existsSync(aapt)) return t.skip('aapt unavailable outside Android runner');
@@ -177,6 +201,18 @@ test('real aapt rejects fake bytes even if update.json declarations match', (t) 
   const result = spawnSync(process.execPath, [path.join(__dirname, '../scripts/publisher-check.js'), 'apk', apkFile, updateFile, version, aapt], { encoding: 'utf8' });
   assert.equal(result.status, 1, result.stdout);
   assert.match(result.stderr, /Invalid APK or aapt failed/);
+});
+
+test('real apksigner rejects fake bytes before certificate identity parsing', (t) => {
+  const apksigner = process.env.APKSIGNER_TOOL || (process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA || '', 'Android', 'Sdk', 'build-tools', '34.0.0', 'apksigner.bat') : '');
+  if (!apksigner || !fs.existsSync(apksigner)) return t.skip('apksigner unavailable outside Android runner');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atletismo-fake-signature-test-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const apkFile = path.join(dir, 'Atletismo-release.apk');
+  fs.writeFileSync(apkFile, apk);
+  const result = spawnSync(process.execPath, [path.join(__dirname, '../scripts/publisher-check.js'), 'certificate', apkFile, apksigner], { encoding: 'utf8' });
+  assert.equal(result.status, 1, result.stdout);
+  assert.match(result.stderr, /APK signature verification failed/);
 });
 
 test('artifact archive accepts only the two exact root entries', (t) => {
