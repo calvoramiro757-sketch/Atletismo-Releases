@@ -205,9 +205,7 @@ jobs:
           name: validated-release-candidate
           path: dist
 
-      - name: Revalidate exact files and current public Stable
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Revalidate files, APK identity and certificate without GitHub credentials
         shell: bash
         run: |
           set -euo pipefail
@@ -218,6 +216,13 @@ jobs:
           "$tools/apksigner" verify --verbose dist/Atletismo-release.apk
           node scripts/publisher-check.js certificate dist/Atletismo-release.apk "$tools/apksigner"
           node scripts/publisher-check.js apk dist/Atletismo-release.apk dist/update.json "$VERSION" "$tools/aapt"
+
+      - name: Revalidate current public Stable and release/tag absence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
           gh api "repos/$RELEASES_REPO/releases/latest" > "$RUNNER_TEMP/latest.json"
           stable_tag=$(jq -er '.tag_name | select(test("^v(0|[1-9][0-9]{0,5})\\.(0|[1-9][0-9]{0,5})\\.(0|[1-9][0-9]{0,5})$"))' "$RUNNER_TEMP/latest.json")
           curl -fLsS --retry 0 --max-time 30 "https://github.com/$RELEASES_REPO/releases/download/$stable_tag/update.json" -o "$RUNNER_TEMP/stable-update.json"
@@ -262,7 +267,6 @@ jobs:
           set -euo pipefail
           gh api "repos/$RELEASES_REPO/releases/tags/v$VERSION" > "$RUNNER_TEMP/draft.json"
           node scripts/publisher-check.js release "$RUNNER_TEMP/draft.json" "$VERSION" "$APK_SHA256" "$UPDATE_JSON_SHA256" true
-          node scripts/publisher-check.js files dist "$VERSION" "$APK_SHA256" "$UPDATE_JSON_SHA256"
 
       - name: Promote verified draft to public Stable/latest
         env:

@@ -5,9 +5,9 @@ const assert = require('node:assert/strict');
 const SOURCE_REPO = 'calvoramiro757-sketch/Atletismo';
 const RELEASES_REPO = 'calvoramiro757-sketch/Atletismo-Releases';
 const PACKAGE_ID = 'com.atletismo.personal';
-// Audited blob from the signed workflow used for the V3.4.3 candidate.
-// Changing this constant requires an independent audit of the new pipeline.
-const TRUSTED_SIGNED_WORKFLOW_BLOB = '256f0e17a5661841dad0ef9b4873402263d91e09';
+// Audited signed workflow with all external Actions pinned for future candidates.
+// The historic V3.4.3 workflow blob is deliberately not trusted. Changes require audit.
+const TRUSTED_SIGNED_WORKFLOW_BLOB = '28e1851e0afd279e876a315299907752665df46f';
 // Extracted with apksigner --print-certs from V3.4.3 signed artifact 10873090249
 // (signed run 36153245765, source 40e28c969b914724cecc74c05b973813f842e20c).
 const OFFICIAL_SIGNING_CERT_SHA256 = '9dfe429d7de62570120a3d9f8f0026e55317f57bae4f9d8acbcab32941191ce5';

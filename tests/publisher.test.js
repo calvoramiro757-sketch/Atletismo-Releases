@@ -87,6 +87,7 @@ function evidence() {
 
 test('audited workflow, run, attempt and exact artifact are required', () => {
   assert.doesNotThrow(() => policy.validateEvidence(evidence()));
+  assert.throws(() => policy.validateEvidence({ ...evidence(), workflowBlob: '256f0e17a5661841dad0ef9b4873402263d91e09' }), /not audited/);
   for (const [change, message] of [
     [(e) => { e.workflowBlob = '0'.repeat(40); }, /not audited/],
     [(e) => { e.run.head_sha = '0'.repeat(40); }, /source SHA/],
@@ -102,6 +103,25 @@ test('audited workflow, run, attempt and exact artifact are required', () => {
     change(value);
     assert.throws(() => policy.validateEvidence(value), message);
   }
+});
+
+test('privileged job parses candidate APK only in steps without GitHub credentials', () => {
+  const workflow = fs.readFileSync(path.join(__dirname, '../.github/workflows/publish-atletismo-release.yml'), 'utf8');
+  const publish = workflow.split(/^  publish:\s*$/m)[1];
+  assert.ok(publish, 'Missing publish job');
+  const jobEnvironment = publish.split(/^    steps:\s*$/m)[0];
+  assert.doesNotMatch(jobEnvironment, /^\s*(?:GH_TOKEN|GITHUB_TOKEN|ATLETISMO_SOURCE_READ_TOKEN):/m);
+  const steps = publish.split(/(?=^      - (?:name|uses):)/m).slice(1);
+  const parser = /node scripts\/publisher-check\.js (?:files|certificate|apk)\b|\bapksigner\b|\baapt\b/;
+  const parsingSteps = steps.filter((step) => parser.test(step));
+  assert.equal(parsingSteps.length, 1, 'Expected one isolated APK processing step in publish');
+  for (const step of parsingSteps) {
+    assert.doesNotMatch(step, /^        env:/m, 'APK processing step must not declare credentials');
+    assert.doesNotMatch(step, /GH_TOKEN|GITHUB_TOKEN|\$\{\{\s*(?:secrets\.|github\.token)/, 'APK processing step must not reference GitHub credentials');
+  }
+  const stableStep = steps.find((step) => step.includes('node scripts/publisher-check.js stable'));
+  assert.ok(stableStep && /^        env:\s*\r?\n\s*GH_TOKEN:/m.test(stableStep), 'Stable step needs its scoped token');
+  assert.ok(steps.indexOf(stableStep) > steps.indexOf(parsingSteps[0]), 'Credentialed operations must follow APK validation');
 });
 
 test('file verifier rejects APK hash, update hash, and additional files', (t) => {
