@@ -67,6 +67,44 @@ test('V3.4.4 historic draft permits only exact metadata replacement, then resume
   assert.throws(() => policy.reconcileReleaseState({ tag: null, releases: [], latest: latest(), expected: e }), /recovery draft is missing/);
 });
 
+test('the one historic draft remains identifiable after GitHub changes its tag_name to its untagged slug', () => {
+  const r = policy.V344_RECOVERY;
+  const publisherSha = 'f'.repeat(40);
+  const beforeNotes = policy.releaseNotes({ sourceSha: r.sourceSha, metadataSourceSha: r.metadataSourceSha,
+    signedRunId: r.signedRunId, artifactId: r.artifactId, apkSha256: r.apkSha256,
+    updateJsonSha256: r.newUpdateSha256, publisherSha: r.firstRepairPublisherSha,
+    replacedUpdateSha256: r.oldUpdateSha256 });
+  const afterNotes = policy.releaseNotes({ sourceSha: r.sourceSha, metadataSourceSha: r.metadataSourceSha,
+    signedRunId: r.signedRunId, artifactId: r.artifactId, apkSha256: r.apkSha256,
+    updateJsonSha256: r.newUpdateSha256, publisherSha, resumedFromPublisherSha: r.firstRepairPublisherSha,
+    replacedUpdateSha256: r.oldUpdateSha256 });
+  const baseUrl = `https://github.com/${policy.RELEASES_REPO}`;
+  const partial = {
+    id: r.releaseId, tag_name: r.draftSlug, name: 'App Atletismo V3.4.4',
+    body: beforeNotes, draft: true, prerelease: false, target_commitish: 'main',
+    html_url: `${baseUrl}/releases/tag/${r.draftSlug}`,
+    assets: [
+      { id: r.apkAssetId, name: 'Atletismo-release.apk', size: 45873398, state: 'uploaded',
+        digest: `sha256:${r.apkSha256}`, browser_download_url: `${baseUrl}/releases/download/${r.draftSlug}/Atletismo-release.apk` },
+      { id: 593095487, name: 'update.json', size: 1757, state: 'uploaded',
+        digest: `sha256:${r.newUpdateSha256}`, browser_download_url: `${baseUrl}/releases/download/${r.draftSlug}/update.json` }
+    ]
+  };
+  const expected = { version: r.version, tagSha: r.tagSha, apkSha256: r.apkSha256,
+    updateJsonSha256: r.newUpdateSha256, apkSize: 45873398, updateJsonSize: 1757,
+    notes: afterNotes, recovery: true };
+  const tag = { ref: 'refs/tags/v3.4.4', object: { type: 'commit', sha: r.tagSha } };
+  const state = (releases, overrides = {}) => policy.reconcileReleaseState({ tag, releases, latest: latest(), expected, ...overrides });
+  assert.equal(state([partial]).action, 'update-notes');
+  assert.equal(state([{ ...partial, body: afterNotes }]).action, 'restore-tag');
+  assert.equal(state([{ ...partial, tag_name: 'v3.4.4', body: afterNotes }]).action, 'promote');
+  assert.throws(() => state([partial, { ...partial, id: 999 }]), /Duplicate release title/);
+  assert.throws(() => state([partial, { ...partial, id: 999, tag_name: 'v3.4.4', name: 'Different' }]), /Duplicate releases for version/);
+  assert.throws(() => state([{ ...partial, id: 999 }]), /recovery draft is missing/);
+  assert.throws(() => state([{ ...partial, tag_name: 'untagged-other' }]), /Unexpected recovery release tag_name/);
+  assert.throws(() => state([partial], { tag: { ...tag, object: { type: 'commit', sha: '0'.repeat(40) } } }), /unexpected commit/);
+});
+
 test('metadata source must be stable-ready, versioned and identical to candidate', () => {
   const source = '---\nreleaseStatus: stable-ready\nversion: 3.4.4\n---\n# V3.4.4 — Perfil Velocista\nFinal.\n';
   const candidate = { version: '3.4.4', changelog: '# V3.4.4 — Perfil Velocista\nFinal.\n' };
