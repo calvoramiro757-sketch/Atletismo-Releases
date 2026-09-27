@@ -101,5 +101,27 @@ test('only the exact V3.4.4 candidate can use a metadata source after the signed
   const r = policy.V344_RECOVERY;
   assert.equal(policy.validateCandidateProvenance({ ...r, oldUpdateSha256: r.oldUpdateSha256, newUpdateSha256: r.newUpdateSha256 }), true);
   assert.throws(() => policy.validateCandidateProvenance({ ...r, oldUpdateSha256: '0'.repeat(64) }), /recovery oldUpdateSha256 mismatch/);
+  assert.throws(() => policy.validateCandidateProvenance({ ...r, tagSha: 'de6266cbf54ad04ce8f88d261179d9599a02c4f8' }), /recovery tagSha mismatch/);
   assert.throws(() => policy.validateCandidateProvenance({ ...r, version: '3.4.5' }), /Future metadata source/);
+});
+
+test('dry run reads the real V3.4.4 tag instead of passing the publisher commit as tag SHA', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'publisher-recovery-tag-'));
+  try {
+    const file = path.join(directory, 'tag.json');
+    const check = () => spawnSync(process.execPath, [path.join(__dirname, '../scripts/publisher-check.js'), 'recovery-tag', file], { encoding: 'utf8' });
+    fs.writeFileSync(file, JSON.stringify({ ref: 'refs/tags/v3.4.4', object: { type: 'commit', sha: policy.V344_RECOVERY.tagSha } }));
+    assert.equal(check().status, 0);
+    fs.writeFileSync(file, JSON.stringify({ ref: 'refs/tags/v3.4.4', object: { type: 'commit', sha: 'de6266cbf54ad04ce8f88d261179d9599a02c4f8' } }));
+    const wrong = check();
+    assert.notEqual(wrong.status, 0);
+    assert.match(wrong.stderr, /recovery tag SHA mismatch/);
+    const workflow = fs.readFileSync(path.join(__dirname, '../.github/workflows/publish-atletismo-release.yml'), 'utf8');
+    assert.match(workflow, /node scripts\/publisher-check\.js recovery-tag "\$RUNNER_TEMP\/recovery-tag\.json"/);
+    assert.match(workflow, /candidate_tag_sha=\$\(jq -er '\.object\.sha' "\$RUNNER_TEMP\/recovery-tag\.json"\)/);
+    assert.match(workflow, /prepare-metadata dist .* "\$candidate_tag_sha"/);
+  } finally {
+    assert.ok(path.resolve(directory).startsWith(path.resolve(os.tmpdir(), 'publisher-recovery-tag-')));
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

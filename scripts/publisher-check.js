@@ -42,6 +42,12 @@ try {
     assert.equal(hash(update), updateJsonSha256, 'update.json hash mismatch');
     policy.validateMetadata(read(update), { version, apkSha256, apkSize: fs.statSync(apk).size });
     console.log('Exact files, hashes and update.json contract verified');
+  } else if (mode === 'recovery-tag') {
+    const tag = read(args[0]);
+    assert.equal(tag.ref, 'refs/tags/v3.4.4', 'V3.4.4 recovery tag ref mismatch');
+    assert.equal(tag.object?.type, 'commit', 'V3.4.4 recovery tag must point directly to a commit');
+    assert.equal(tag.object.sha, policy.V344_RECOVERY.tagSha, 'V3.4.4 recovery tag SHA mismatch');
+    console.log(`Historic V3.4.4 tag verified: ${tag.object.sha}`);
   } else if (mode === 'prepare-metadata') {
     const [directory, sourceFile, version, sourceSha, metadataSourceSha, signedRunId, artifactId, tagSha, apkSha256, oldUpdateSha256, newUpdateSha256] = args;
     const recovery = policy.validateCandidateProvenance({ version, sourceSha, metadataSourceSha, signedRunId, artifactId, tagSha, apkSha256, oldUpdateSha256, newUpdateSha256 });
