@@ -74,6 +74,32 @@ async function uploadAsset(release, name, bytes) {
   console.log(`Uploaded ${name} id=${uploaded.id} sha256=${hash(bytes)}`);
 }
 
+async function updateReleaseNotes(id, notes, version, recovery) {
+  const updated = await request('PATCH', `${base}/releases/${id}`,
+    { body: notes, ...(recovery ? { tag_name: `v${version}` } : {}) }, [200]);
+  assert.equal(updated.id, id, 'Updated release ID mismatch');
+  assert.equal(updated.draft, true, 'Notes update unexpectedly published release');
+  assert.equal(updated.body, notes, 'Updated release notes mismatch');
+}
+
+async function restoreRecoveryTag(id, version) {
+  assert.equal(id, policy.V344_RECOVERY.releaseId, 'Unexpected recovery release ID');
+  assert.equal(version, policy.V344_RECOVERY.version, 'Unexpected recovery version');
+  const updated = await request('PATCH', `${base}/releases/${id}`, { tag_name: `v${version}` }, [200]);
+  assert.equal(updated.id, id, 'Restored release ID mismatch');
+  assert.equal(updated.draft, true, 'Tag restoration unexpectedly published release');
+  assert.equal(updated.tag_name, `v${version}`, 'GitHub did not accept restored draft tag');
+}
+
+async function promoteRelease(id, version) {
+  const published = await request('PATCH', `${base}/releases/${id}`,
+    { tag_name: `v${version}`, draft: false, make_latest: 'true' }, [200]);
+  assert.equal(published.id, id, 'Published release ID mismatch');
+  assert.equal(published.tag_name, `v${version}`, 'Published tag mismatch');
+  assert.equal(published.draft, false, 'Release remained a draft');
+  assert.equal(published.prerelease, false, 'Release became prerelease');
+}
+
 async function run(mode, directory) {
   assert.ok(['inspect', 'publish'].includes(mode), 'Invalid transaction mode');
   assert.ok(process.env.GH_TOKEN, 'Missing release token');
@@ -94,11 +120,13 @@ async function run(mode, directory) {
   if (recovery) assert.equal(metadata.versionCode, 30319, 'V3.4.4 versionCode mismatch');
   const notes = policy.releaseNotes({ sourceSha, metadataSourceSha: recovery ? metadataSourceSha : undefined,
     signedRunId, artifactId, apkSha256, updateJsonSha256: newUpdateSha256, publisherSha,
-    replacedUpdateSha256: recovery ? oldUpdateSha256 : undefined });
+    replacedUpdateSha256: recovery ? oldUpdateSha256 : undefined,
+    resumedFromPublisherSha: recovery ? policy.V344_RECOVERY.firstRepairPublisherSha : undefined });
   const expected = { version, tagSha: recovery ? policy.V344_RECOVERY.tagSha : publisherSha,
     apkSha256, updateJsonSha256: newUpdateSha256, apkSize: apk.length, updateJsonSize: update.length,
     notes, recovery };
 
+  let restorationAttempted = false;
   for (let attempt = 0; attempt < 12; attempt++) {
     const state = await readState(version);
     if (state.latest.tag_name !== `v${version}`) {
@@ -133,9 +161,14 @@ async function run(mode, directory) {
       } else if (decision.action === 'upload-assets') {
         for (const name of decision.missing) await uploadAsset(release, name, name === 'Atletismo-release.apk' ? apk : update);
       } else if (decision.action === 'update-notes') {
-        await request('PATCH', `${base}/releases/${decision.releaseId}`, { body: notes }, [200]);
+        await updateReleaseNotes(decision.releaseId, notes, version, recovery);
+      } else if (decision.action === 'restore-tag') {
+        assert.ok(recovery, 'Tag restoration is restricted to V3.4.4');
+        assert.equal(restorationAttempted, false, 'GitHub did not retain restored draft tag; stop before publication');
+        restorationAttempted = true;
+        await restoreRecoveryTag(decision.releaseId, version);
       } else if (decision.action === 'promote') {
-        await request('PATCH', `${base}/releases/${decision.releaseId}`, { draft: false, make_latest: 'true' }, [200]);
+        await promoteRelease(decision.releaseId, version);
       } else {
         throw new Error(`Unsupported reconciliation action: ${decision.action}`);
       }
@@ -149,4 +182,4 @@ if (require.main === module) run(process.argv[2], process.argv[3]).catch((error)
   process.exitCode = 1;
 });
 
-module.exports = { run, readState, verifyAsset };
+module.exports = { run, readState, verifyAsset, updateReleaseNotes, restoreRecoveryTag, promoteRelease };

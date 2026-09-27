@@ -18,6 +18,10 @@ En la recuperación V3.4.4, primero descarga y comprueba el APK y el metadata vi
 
 El dry run `36287258383` falló antes de cualquier escritura porque el workflow pasó `GITHUB_SHA` (`de6266cbf54ad04ce8f88d261179d9599a02c4f8`, commit del publicador) al argumento `tagSha` de la recuperación. El tag real seguía apuntando a `1cf5428dae7e04f144eff9b75c5f56c720204598`; el draft y ambos assets seguían intactos. La corrección obtiene el tag real con el token de lectura del repositorio de releases y valida ref, tipo y SHA histórico antes de preparar el metadata. `GITHUB_SHA` permanece reservado para identificar el commit del publicador en las notas de procedencia.
 
+El run real `36288743181` pasó la validación, verificó ambos assets del draft, eliminó **solo** el metadata defectuoso ID `591683601` y subió el metadata final ID `593095487` (SHA-256 `4ea5fdfdc0827854bae4c4d2d273153f0beeccd52f5b961650a61dd21a193bd0`). El APK ID `591683598` conservó su SHA aprobado. Tras actualizar las notas, GitHub expuso el mismo draft ID `397433395` con `tag_name=untagged-5c8d6e31885078dea5c5`. La reconciliación anterior buscó solo `tag_name=v3.4.4`: encontró cero releases por tag y una con el título esperado, por lo que disparó `Duplicate release title`. La Stable pública continuó siendo V3.4.3; no hubo publicación.
+
+La recuperación de ese estado parcial reconoce **solo** el ID `397433395` con el slug histórico exacto, cuerpo de procedencia anterior exacto, dos assets/hashes/tamaños y ref real `v3.4.4` al commit auditado. Sigue rechazando una segunda release con el mismo título o tag. Una continuación desde otro commit de publicador deja el SHA anterior como evidencia en las notas. La transacción restablece el `tag_name` explícitamente mientras la release sigue siendo draft y comprueba que GitHub lo acepte; solo después puede promover con `tag_name=v3.4.4` también explícito. Si GitHub no conserva el tag restaurado, se detiene sin publicar.
+
 ## V3.4.5 y siguientes
 
 1. Preparar un changelog con `releaseStatus: stable-ready` y versión exacta **antes** del build firmado. Cerrar la auditoría del source SHA y registrar run, artifact, hashes y versión.

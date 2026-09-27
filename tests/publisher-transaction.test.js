@@ -105,3 +105,35 @@ test('publisher resumes a partial draft and a completed publication without dupl
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('recovery updates notes while keeping a draft, restores its exact tag, then promotes with explicit tag', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousToken = process.env.GH_TOKEN;
+  const r = policy.V344_RECOVERY;
+  const calls = [];
+  let keepAlias = false;
+  try {
+    process.env.GH_TOKEN = 'synthetic-test-token';
+    globalThis.fetch = async (url, options = {}) => {
+      assert.equal(url, `https://api.github.com/repos/${policy.RELEASES_REPO}/releases/${r.releaseId}`);
+      assert.equal(options.method, 'PATCH');
+      const body = JSON.parse(options.body);
+      calls.push(body);
+      if (body.draft === false) return json({ id: r.releaseId, tag_name: body.tag_name, draft: false, prerelease: false });
+      if (body.body) return json({ id: r.releaseId, tag_name: r.draftSlug, draft: true, body: body.body });
+      return json({ id: r.releaseId, tag_name: keepAlias ? r.draftSlug : body.tag_name, draft: true });
+    };
+    await transaction.updateReleaseNotes(r.releaseId, 'Audited notes', r.version, true);
+    assert.deepEqual(calls[0], { body: 'Audited notes', tag_name: 'v3.4.4' });
+    keepAlias = true;
+    await assert.rejects(transaction.restoreRecoveryTag(r.releaseId, r.version), /did not accept restored draft tag/);
+    assert.equal(calls.length, 2, 'A failed tag restoration cannot reach publication');
+    keepAlias = false;
+    await transaction.restoreRecoveryTag(r.releaseId, r.version);
+    await transaction.promoteRelease(r.releaseId, r.version);
+    assert.deepEqual(calls[3], { tag_name: 'v3.4.4', draft: false, make_latest: 'true' });
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousToken === undefined) delete process.env.GH_TOKEN; else process.env.GH_TOKEN = previousToken;
+  }
+});

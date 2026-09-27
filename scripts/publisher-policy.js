@@ -23,6 +23,8 @@ const V344_RECOVERY = Object.freeze({
   artifactId: '10917702155',
   tagSha: '1cf5428dae7e04f144eff9b75c5f56c720204598',
   releaseId: 397433395,
+  draftSlug: 'untagged-5c8d6e31885078dea5c5',
+  firstRepairPublisherSha: '0538ad30303a45576c8c9150358308ca153b1fd1',
   apkAssetId: 591683598,
   oldUpdateAssetId: 591683601,
   oldUpdateSize: 1619,
@@ -207,7 +209,7 @@ function validateCandidateProvenance(input) {
   return false;
 }
 
-function releaseNotes({ sourceSha, signedRunId, artifactId, apkSha256, updateJsonSha256, publisherSha, metadataSourceSha, replacedUpdateSha256 }) {
+function releaseNotes({ sourceSha, signedRunId, artifactId, apkSha256, updateJsonSha256, publisherSha, metadataSourceSha, replacedUpdateSha256, resumedFromPublisherSha }) {
   assert.match(sourceSha, /^[a-f0-9]{40}$/, 'Invalid source SHA');
   assert.match(String(signedRunId), /^[1-9][0-9]*$/, 'Invalid signed run ID');
   assert.match(String(artifactId), /^[1-9][0-9]*$/, 'Invalid artifact ID');
@@ -216,6 +218,7 @@ function releaseNotes({ sourceSha, signedRunId, artifactId, apkSha256, updateJso
   if (publisherSha !== undefined) assert.match(publisherSha, /^[a-f0-9]{40}$/, 'Invalid publisher SHA');
   if (metadataSourceSha !== undefined) assert.match(metadataSourceSha, /^[a-f0-9]{40}$/, 'Invalid metadata source SHA');
   if (replacedUpdateSha256 !== undefined) assert.match(replacedUpdateSha256, SHA256, 'Invalid replaced update hash');
+  if (resumedFromPublisherSha !== undefined) assert.match(resumedFromPublisherSha, /^[a-f0-9]{40}$/, 'Invalid previous publisher SHA');
   return [
     `Source SHA: ${sourceSha}`,
     ...(metadataSourceSha ? [`Metadata source SHA: ${metadataSourceSha}`] : []),
@@ -224,6 +227,7 @@ function releaseNotes({ sourceSha, signedRunId, artifactId, apkSha256, updateJso
     `APK SHA-256: ${apkSha256}`,
     `update.json SHA-256: ${updateJsonSha256}`,
     ...(publisherSha ? [`Publisher SHA: ${publisherSha}`] : []),
+    ...(resumedFromPublisherSha ? [`Previous publisher SHA: ${resumedFromPublisherSha}`] : []),
     ...(replacedUpdateSha256 ? [`Replaced defective update.json SHA-256: ${replacedUpdateSha256}`] : [])
   ].join('\n') + '\n';
 }
@@ -243,10 +247,27 @@ function reconcileReleaseState({ tag, releases, latest, expected }) {
     assert.equal(tag.object?.type, 'commit', 'Tag must point directly to a commit');
     assert.equal(tag.object.sha, tagSha, 'Tag points to unexpected commit');
   }
-  const matching = releases.filter((release) => release.tag_name === `v${version}`);
+  const matching = releases.filter((item) => item.tag_name === `v${version}`);
+  const titled = releases.filter((item) => item.name === `App Atletismo V${version}`);
   assert.ok(matching.length <= 1, 'Duplicate releases for version');
-  const release = matching[0] || null;
-  assert.equal(releases.filter((item) => item.name === `App Atletismo V${version}`).length, release ? 1 : 0, 'Duplicate release title');
+  assert.ok(titled.length <= 1, 'Duplicate release title');
+  let release;
+  if (recovery) {
+    const byId = releases.filter((item) => item.id === V344_RECOVERY.releaseId);
+    assert.equal(byId.length, 1, 'V3.4.4 recovery draft is missing or duplicated');
+    release = byId[0];
+    assert.equal(titled.length, 1, 'V3.4.4 recovery title missing');
+    assert.equal(titled[0].id, release.id, 'Duplicate release title');
+    if (matching.length) assert.equal(matching[0].id, release.id, 'Duplicate releases for version');
+    const alias = release.tag_name === V344_RECOVERY.draftSlug;
+    assert.ok(release.tag_name === `v${version}` || (release.draft && alias), 'Unexpected recovery release tag_name');
+    if (alias) assert.equal(release.html_url, `https://github.com/${RELEASES_REPO}/releases/tag/${V344_RECOVERY.draftSlug}`, 'Recovery draft slug mismatch');
+    if (!release.draft) assert.equal(release.html_url, `https://github.com/${RELEASES_REPO}/releases/tag/v${version}`, 'Public recovery URL mismatch');
+  } else {
+    release = matching[0] || null;
+    assert.equal(titled.length, release ? 1 : 0, 'Duplicate release title');
+    if (release) assert.equal(titled[0].id, release.id, 'Duplicate release title');
+  }
   if (release === null) {
     assert.ok(!recovery, 'V3.4.4 recovery draft is missing');
     return { action: tag ? 'create-draft' : 'create-tag' };
@@ -258,7 +279,9 @@ function reconcileReleaseState({ tag, releases, latest, expected }) {
   assert.equal(release.target_commitish, recovery ? 'main' : tagSha, 'Release target commit mismatch');
   const legacyNotes = recovery && releaseNotes({ sourceSha: V344_RECOVERY.sourceSha, signedRunId: V344_RECOVERY.signedRunId, artifactId: V344_RECOVERY.artifactId, apkSha256: V344_RECOVERY.apkSha256, updateJsonSha256: V344_RECOVERY.oldUpdateSha256 });
   const legacyBody = recovery && release.body === legacyNotes;
-  assert.ok(release.body === notes || legacyBody, 'Release provenance notes mismatch');
+  const firstRepairNotes = recovery && releaseNotes({ sourceSha: V344_RECOVERY.sourceSha, metadataSourceSha: V344_RECOVERY.metadataSourceSha, signedRunId: V344_RECOVERY.signedRunId, artifactId: V344_RECOVERY.artifactId, apkSha256: V344_RECOVERY.apkSha256, updateJsonSha256: V344_RECOVERY.newUpdateSha256, publisherSha: V344_RECOVERY.firstRepairPublisherSha, replacedUpdateSha256: V344_RECOVERY.oldUpdateSha256 });
+  const firstRepairBody = recovery && release.body === firstRepairNotes;
+  assert.ok(release.body === notes || legacyBody || (release.draft && firstRepairBody), 'Release provenance notes mismatch');
   assert.equal(release.prerelease, false, 'Release is prerelease');
   assert.ok(Array.isArray(release.assets), 'Release assets unavailable');
   assert.ok(release.assets.length <= FILES.length, 'Unexpected or duplicate release assets');
@@ -273,7 +296,8 @@ function reconcileReleaseState({ tag, releases, latest, expected }) {
     const publicUrl = `https://github.com/${RELEASES_REPO}/releases/download/v${version}/${name}`;
     const slug = /^https:\/\/github\.com\/calvoramiro757-sketch\/Atletismo-Releases\/releases\/tag\/(untagged-[a-f0-9]+)$/.exec(release.html_url || '');
     const draftUrl = slug && `https://github.com/${RELEASES_REPO}/releases/download/${slug[1]}/${name}`;
-    assert.ok(asset.browser_download_url === publicUrl || (release.draft && asset.browser_download_url === draftUrl), `Asset ${name} URL mismatch`);
+    const recoveryDraftUrl = recovery && release.draft && `https://github.com/${RELEASES_REPO}/releases/download/${V344_RECOVERY.draftSlug}/${name}`;
+    assert.ok(asset.browser_download_url === publicUrl || (release.draft && asset.browser_download_url === draftUrl) || asset.browser_download_url === recoveryDraftUrl, `Asset ${name} URL mismatch`);
     const digest = name === FILES[0] ? apkSha256 : updateJsonSha256;
     const size = name === FILES[0] ? apkSize : updateJsonSize;
     if (recovery && name === FILES[0]) assert.equal(asset.id, V344_RECOVERY.apkAssetId, 'Recovery APK asset ID mismatch');
@@ -296,9 +320,11 @@ function reconcileReleaseState({ tag, releases, latest, expected }) {
   }
   if (release.draft) {
     if (missing.length) return { action: 'upload-assets', releaseId: release.id, missing };
-    if (legacyBody) return { action: 'update-notes', releaseId: release.id, missing: [] };
+    if ((legacyBody || firstRepairBody) && release.body !== notes) return { action: 'update-notes', releaseId: release.id, missing: [] };
+    if (recovery && release.tag_name === V344_RECOVERY.draftSlug) return { action: 'restore-tag', releaseId: release.id, missing: [] };
     return { action: 'promote', releaseId: release.id, missing: [] };
   }
+  assert.ok(!legacyBody && !firstRepairBody, 'Public release has incomplete provenance notes');
   assert.deepEqual(missing, [], 'Public release is incomplete');
   assert.equal(latest.id, release.id, 'An older publication cannot supersede latest');
   return { action: 'complete', releaseId: release.id, missing: [] };
