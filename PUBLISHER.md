@@ -16,6 +16,8 @@ El job con `contents:write`, después de su puerta de aprobación, lista release
 
 En la recuperación V3.4.4, primero descarga y comprueba el APK y el metadata viejo del draft ID `397433395`. Registra en el log el ID `591683601` y SHA histórico del metadata defectuoso. Elimina **solo ese asset**, sube el metadata nuevo, verifica sus bytes, actualiza las notas de procedencia con ambos hashes y promueve el mismo draft por ID. Cada paso puede reanudarse después de una interrupción. Si hay otro tag, release, asset, digest, body o latest inesperado, falla sin publicar. La verificación final exige que V3.4.4 sea la Stable pública y que ambos assets descargados tengan los hashes esperados.
 
+El dry run `36287258383` falló antes de cualquier escritura porque el workflow pasó `GITHUB_SHA` (`de6266cbf54ad04ce8f88d261179d9599a02c4f8`, commit del publicador) al argumento `tagSha` de la recuperación. El tag real seguía apuntando a `1cf5428dae7e04f144eff9b75c5f56c720204598`; el draft y ambos assets seguían intactos. La corrección obtiene el tag real con el token de lectura del repositorio de releases y valida ref, tipo y SHA histórico antes de preparar el metadata. `GITHUB_SHA` permanece reservado para identificar el commit del publicador en las notas de procedencia.
+
 ## V3.4.5 y siguientes
 
 1. Preparar un changelog con `releaseStatus: stable-ready` y versión exacta **antes** del build firmado. Cerrar la auditoría del source SHA y registrar run, artifact, hashes y versión.

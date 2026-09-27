@@ -129,6 +129,16 @@ jobs:
           unzip -qq "$RUNNER_TEMP/source-artifact.zip" -d dist
           node scripts/publisher-check.js files dist "$VERSION" "$APK_SHA256" "$ARTIFACT_UPDATE_SHA256"
 
+      - name: Verify exact historical V3.4.4 tag before metadata repair
+        if: inputs.version == '3.4.4'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/$RELEASES_REPO/git/ref/tags/v$VERSION" > "$RUNNER_TEMP/recovery-tag.json"
+          node scripts/publisher-check.js recovery-tag "$RUNNER_TEMP/recovery-tag.json"
+
       - name: Verify structured Stable source and prepare final metadata
         env:
           GH_TOKEN: ${{ secrets.ATLETISMO_SOURCE_READ_TOKEN }}
@@ -136,7 +146,11 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/$SOURCE_REPO/contents/docs/changelog/$VERSION.md?ref=$METADATA_SOURCE_SHA" --jq '.content' | base64 -d > "$RUNNER_TEMP/stable-changelog.md"
-          node scripts/publisher-check.js prepare-metadata dist "$RUNNER_TEMP/stable-changelog.md" "$VERSION" "$SOURCE_SHA" "$METADATA_SOURCE_SHA" "$SIGNED_RUN_ID" "$ARTIFACT_ID" "$GITHUB_SHA" "$APK_SHA256" "$ARTIFACT_UPDATE_SHA256" "$UPDATE_JSON_SHA256"
+          candidate_tag_sha="$GITHUB_SHA"
+          if [[ "$VERSION" == "3.4.4" ]]; then
+            candidate_tag_sha=$(jq -er '.object.sha' "$RUNNER_TEMP/recovery-tag.json")
+          fi
+          node scripts/publisher-check.js prepare-metadata dist "$RUNNER_TEMP/stable-changelog.md" "$VERSION" "$SOURCE_SHA" "$METADATA_SOURCE_SHA" "$SIGNED_RUN_ID" "$ARTIFACT_ID" "$candidate_tag_sha" "$APK_SHA256" "$ARTIFACT_UPDATE_SHA256" "$UPDATE_JSON_SHA256"
           node scripts/publisher-check.js files dist "$VERSION" "$APK_SHA256" "$UPDATE_JSON_SHA256"
 
       - name: Inspect signed APK identity from its real bytes
