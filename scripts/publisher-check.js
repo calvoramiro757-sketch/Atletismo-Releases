@@ -42,6 +42,20 @@ try {
     assert.equal(hash(update), updateJsonSha256, 'update.json hash mismatch');
     policy.validateMetadata(read(update), { version, apkSha256, apkSize: fs.statSync(apk).size });
     console.log('Exact files, hashes and update.json contract verified');
+  } else if (mode === 'prepare-metadata') {
+    const [directory, sourceFile, version, sourceSha, metadataSourceSha, signedRunId, artifactId, tagSha, apkSha256, oldUpdateSha256, newUpdateSha256] = args;
+    const recovery = policy.validateCandidateProvenance({ version, sourceSha, metadataSourceSha, signedRunId, artifactId, tagSha, apkSha256, oldUpdateSha256, newUpdateSha256 });
+    const file = path.join(directory, 'update.json');
+    assert.equal(hash(file), oldUpdateSha256, 'Signed metadata hash mismatch');
+    const source = fs.readFileSync(sourceFile, 'utf8');
+    if (recovery) {
+      assert.equal(read(file).versionCode, 30319, 'V3.4.4 versionCode mismatch');
+      assert.equal(read(file).changelog.includes('No hay APK V3.4.4 publicada.'), true, 'Historic defective metadata differs from documented source');
+      fs.writeFileSync(file, policy.repairMetadata(read(file), source, version));
+    }
+    policy.validateMetadataSource(read(file), source, version);
+    assert.equal(hash(file), newUpdateSha256, 'Final metadata hash mismatch');
+    console.log(`Stable changelog source and final metadata verified${recovery ? ' after exact V3.4.4 recovery' : ''}`);
   } else if (mode === 'apk') {
     const [apkFile, updateFile, version, aaptFile] = args;
     const actual = apkInspection.inspectApk(apkFile, aaptFile);
