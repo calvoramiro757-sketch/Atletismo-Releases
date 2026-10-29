@@ -9,6 +9,8 @@ const apkInspection = require('./apk-inspection');
 
 const read = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
 const hash = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+const r1=require('./r1-release-verification');
+function artifactFiles(blobFile){if(!blobFile)return policy.FILES;const b=fs.readFileSync(blobFile,'utf8').trim();if(b===r1.R1_WORKFLOW_BLOB)return r1.FILES;assert.equal(b,policy.TRUSTED_SIGNED_WORKFLOW_BLOB,'Unknown artifact workflow');return policy.FILES;}
 const [mode, ...args] = process.argv.slice(2);
 
 try {
@@ -18,7 +20,7 @@ try {
   } else if (mode === 'absence') {
     policy.validateAbsenceStatus(Number(args[0]), args[1]);
   } else if (mode === 'zip-entries') {
-    assert.deepEqual(fs.readFileSync(args[0], 'utf8').trimEnd().split(/\r?\n/).sort(), [...policy.FILES].sort(), 'Artifact ZIP must contain exactly the two root files');
+    assert.deepEqual(fs.readFileSync(args[0], 'utf8').trimEnd().split(/\r?\n/).sort(), [...artifactFiles(args[1])].sort(), 'Artifact ZIP file inventory mismatch');
   } else if (mode === 'evidence') {
     const [runFile, jobsFile, artifactFile, blobFile, sourceSha, runId, artifactId, digestFile] = args;
     const result = policy.validateEvidence({
@@ -28,11 +30,12 @@ try {
     fs.writeFileSync(digestFile, result.artifactDigest.slice('sha256:'.length) + '\n');
     console.log(`Signed attempt ${result.attempt} and exact artifact verified`);
   } else if (mode === 'files') {
-    const [directory, version, apkSha256, updateJsonSha256] = args;
+    const [directory, version, apkSha256, updateJsonSha256, blobFile] = args;
+    const expected=artifactFiles(blobFile);
     assert.match(apkSha256, /^[a-f0-9]{64}$/, 'Invalid expected APK hash');
     assert.match(updateJsonSha256, /^[a-f0-9]{64}$/, 'Invalid expected metadata hash');
-    assert.deepEqual(fs.readdirSync(directory).sort(), [...policy.FILES].sort(), 'Artifact must contain exactly two files');
-    for (const file of policy.FILES) {
+    assert.deepEqual(fs.readdirSync(directory).sort(), [...expected].sort(), 'Artifact file inventory mismatch');
+    for (const file of expected) {
       const stat = fs.lstatSync(path.join(directory, file));
       assert.ok(stat.isFile() && !stat.isSymbolicLink(), `Invalid artifact file: ${file}`);
     }
@@ -41,6 +44,7 @@ try {
     assert.equal(hash(apk), apkSha256, 'APK hash mismatch');
     assert.equal(hash(update), updateJsonSha256, 'update.json hash mismatch');
     policy.validateMetadata(read(update), { version, apkSha256, apkSize: fs.statSync(apk).size });
+    if(expected.length===3){const proofFile=path.join(directory,'release-verification.json');assert.ok(fs.statSync(proofFile).size<=1024*1024,'Proof too large');r1.validateProof(read(proofFile),{sourceSha:process.env.SOURCE_SHA,runId:process.env.SIGNED_RUN_ID,version,versionCode:read(update).versionCode,apkSha256,metadataSha256:updateJsonSha256});}
     console.log('Exact files, hashes and update.json contract verified');
   } else if (mode === 'recovery-tag') {
     const tag = read(args[0]);

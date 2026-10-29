@@ -1,4 +1,5 @@
 'use strict';
+const r1=require('./r1-release-verification');
 
 const assert = require('node:assert/strict');
 
@@ -112,6 +113,7 @@ function validateAbsenceStatus(status, kind) {
 }
 
 function validateEvidence({ run, jobs, artifact, workflowBlob, sourceSha, runId, artifactId }) {
+  if(workflowBlob===r1.R1_WORKFLOW_BLOB)return r1.validateEvidence({run,jobs,artifact,workflowBlob,sourceSha,runId,artifactId});
   assert.equal(workflowBlob, TRUSTED_SIGNED_WORKFLOW_BLOB, 'Signed workflow blob is not audited');
   assert.equal(String(run.id), String(runId), 'Signed run ID mismatch');
   assert.equal(run.status, 'completed', 'Signed run incomplete');

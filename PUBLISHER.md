@@ -30,3 +30,8 @@ La recuperación de ese estado parcial reconoce **solo** el ID `397433395` con e
 4. Confirmar en `releases/latest` y en los bytes descargados que la versión, notas, APK y `update.json` coinciden. Verificar que la Stable anterior y sus assets siguen accesibles. Actualizar el checkpoint del repositorio fuente a `RELEASED` solo después de esa comprobación.
 
 Si un run falla, consultar la release y el tag existentes antes de reintentar. El mismo workflow puede reanudarse con los mismos inputs y commit de publicador, siempre que el estado intermedio coincida exactamente con el candidato. Un cambio de código del publicador durante un draft parcial requiere auditoría explícita, porque el body de procedencia fija el SHA del publicador.
+
+
+## V3.5 isolated signing and protected publication
+
+The reviewed R1 workflow has five required jobs: unprivileged build, isolated signing, upgrades from3.4.0 and3.4.5, and final evidence. Publication accepts the exact three-file R1 archive including release-verification.json, checks both upgrade proofs and the official certificate, then publishes only the original APK/update.json asset pair. Source must equal the trusted main controller. The private run/attempt is rechecked after environment approval. Source code and the original signing key remain private. Public production-release requires owner approval, forbids administrator bypass and permits only main. Historical V3.4.4 recovery remains unchanged. No physical-device test is claimed by emulator proofs.
